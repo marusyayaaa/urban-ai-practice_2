@@ -16,7 +16,6 @@
 from __future__ import annotations
 
 import base64
-import html as html_mod
 import io
 import json
 from pathlib import Path
@@ -164,6 +163,24 @@ def read_table(name: str) -> pd.DataFrame:
     return df
 
 
+GEOJSON_PRECISION = 5
+
+
+def _round_floats(obj):
+    if isinstance(obj, float):
+        return round(obj, GEOJSON_PRECISION)
+    if isinstance(obj, list):
+        return [_round_floats(v) for v in obj]
+    if isinstance(obj, dict):
+        return {k: _round_floats(v) for k, v in obj.items()}
+    return obj
+
+
+def minimize_geojson(data):
+    """Округляет координаты и числа, чтобы заметно уменьшить размер HTML."""
+    return _round_floats(data)
+
+
 def load_data() -> gpd.GeoDataFrame:
     blocks = gpd.read_file(BASE / "blocks.geojson")
     master = blocks.reset_index(drop=True).copy()
@@ -248,7 +265,7 @@ def _style_by_color(color_col):
 
 
 def add_geo_layer(m, gdf, cols, name, style_fn, aliases, show=False):
-    data = json.loads(gdf[cols + ["geometry"]].to_json())
+    data = minimize_geojson(json.loads(gdf[cols + ["geometry"]].to_json()))
     tip_cols = [c for c in cols if aliases.get(c, c)]
     folium.GeoJson(
         data,
@@ -330,7 +347,7 @@ def build_map(master: gpd.GeoDataFrame) -> folium.Map:
     try:
         schools = gpd.read_file(BASE / "schools.geojson")
         folium.GeoJson(
-            json.loads(schools.to_json()),
+            minimize_geojson(json.loads(schools.to_json())),
             name="Школы",
             show=True,
             style_function=lambda _f: {"color": "#c62828", "weight": 1.0, "fillColor": "#e53935", "fillOpacity": 0.85},
@@ -340,7 +357,7 @@ def build_map(master: gpd.GeoDataFrame) -> folium.Map:
         pass
 
     folium.GeoJson(
-        json.loads(boundaries[["geometry"]].to_json()),
+        minimize_geojson(json.loads(boundaries[["geometry"]].to_json())),
         name="Граница округа",
         style_function=lambda _f: {"color": "#222222", "weight": 2.5, "fillOpacity": 0.0},
     ).add_to(m)
@@ -354,7 +371,7 @@ def build_map(master: gpd.GeoDataFrame) -> folium.Map:
         try:
             g = gpd.read_file(BASE / fname)
             folium.GeoJson(
-                json.loads(g[["geometry"]].to_json()),
+                minimize_geojson(json.loads(g[["geometry"]].to_json())),
                 name=f"Источник: {layer_name}",
                 show=False,
                 style_function=lambda _f, style=st: style,
@@ -681,7 +698,9 @@ def main() -> None:
     capacity = master["school_capacity"].fillna(0).sum()
     schools = int(round(master["school_count"].fillna(0).sum()))
 
-    map_srcdoc = html_mod.escape(m.get_root().render(), quote=True)
+    # srcdoc кладём в атрибут с одинарными кавычками: так не нужно экранировать
+    # все кавычки JSON (их сотни тысяч), файл получается заметно меньше.
+    map_srcdoc = m.get_root().render().replace("&", "&amp;").replace("'", "&#39;")
 
     cards = f"""
     <div class="cards">
@@ -713,7 +732,7 @@ def main() -> None:
 
   <h2>Интерактивная карта</h2>
   <div class="map-wrap">
-    <div class="map-frame"><iframe title="Карта" srcdoc="{map_srcdoc}"></iframe></div>
+    <div class="map-frame"><iframe title="Карта" srcdoc='{map_srcdoc}'></iframe></div>
     <div class="legend-panel">{legends}</div>
   </div>
 
