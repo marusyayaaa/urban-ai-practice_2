@@ -44,4 +44,5 @@ tests-cov: # тестирование с выводом процента пок�
 	pytest ${TEST_DIR} --cov
 
 test: # тестирование
+	python -m pip install pytest
 	pytest tests
