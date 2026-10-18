@@ -193,11 +193,17 @@ def load_data() -> gpd.GeoDataFrame:
     area = read_table("area_accessibility.csv")
 
     master = master.join(
-        density[["fsi", "gsi", "mxi", "l", "osr", "share_living", "share_non_living", "site_area"]]
+        density[["fsi", "gsi", "mxi", "l", "osr", "share_living", "share_non_living", "site_area",
+                 "footprint_area", "build_floor_area", "living_area", "non_living_area"]]
     )
-    master = master.join(prov[["demand", "provision_strong", "provision_weak"]])
+    master = master.join(
+        prov[["demand", "capacity", "demand_left", "demand_within", "demand_without",
+              "capacity_left", "capacity_within", "capacity_without",
+              "provision_strong", "provision_weak"]].rename(columns={"capacity": "capacity_schools"})
+    )
     master = master.join(area[["area_accessibility"]])
     master["morphotype_spacematrix"] = space["morphotype"]
+    master["spacematrix_cluster"] = space["cluster"]
     master["morphotype_strelka"] = strelka["morphotype"]
 
     try:
@@ -216,8 +222,10 @@ def load_data() -> gpd.GeoDataFrame:
     try:
         landuse = gpd.read_file(BASE / "blocks_landuse.geojson")
         master["land_use"] = landuse["land_use"]
+        master["land_use_share"] = landuse["share"]
     except Exception:
         master["land_use"] = None
+        master["land_use_share"] = None
 
     master["land_use_ru"] = master["land_use"].apply(
         lambda v: "Нет данных" if pd.isna(v) else LAND_USE_LABELS.get(str(v).lower(), "Нет данных")
@@ -228,7 +236,8 @@ def load_data() -> gpd.GeoDataFrame:
     master["st_label"] = master["morphotype_strelka"].apply(strelka_label)
     master["st_color"] = master["morphotype_strelka"].apply(strelka_color)
 
-    for col in ["fsi", "gsi", "mxi", "l", "osr", "share_living", "share_non_living", "area_accessibility"]:
+    for col in ["fsi", "gsi", "mxi", "l", "osr", "share_living", "share_non_living", "area_accessibility",
+                "spacematrix_cluster", "land_use_share"]:
         if col in master.columns:
             master[col] = pd.to_numeric(master[col], errors="coerce").replace([np.inf, -np.inf], np.nan)
     return master
@@ -291,7 +300,7 @@ def build_map(master: gpd.GeoDataFrame) -> folium.Map:
     folium.TileLayer("OpenStreetMap", name="OpenStreetMap").add_to(m)
 
     numeric_layers = [
-        ("fsi", "FSI — коэффициент плотности застройки", "viridis"),
+        ("fsi", "FSI — коэффициент плотности застройки", "YlOrRd"),
         ("gsi", "GSI — занятость территории пятном", "Blues"),
         ("mxi", "MXI — доля жилой функции", "PuBuGn"),
         ("l", "L — средняя этажность", "magma"),
@@ -331,7 +340,8 @@ def build_map(master: gpd.GeoDataFrame) -> folium.Map:
     )
 
     add_geo_layer(
-        m, master, ["population", "l", "fsi", "demand", "provision_strong", "area_accessibility"],
+        m, master, ["population", "l", "fsi", "demand", "provision_strong", "area_accessibility",
+                    "spacematrix_cluster", "land_use_share"],
         "Показатели квартала (подсказка)",
         lambda _f: {"fillColor": "#ffffff", "color": "#111111", "weight": 0.6, "fillOpacity": 0.0},
         {
@@ -341,6 +351,8 @@ def build_map(master: gpd.GeoDataFrame) -> folium.Map:
             "demand": "Спрос на школы, мест",
             "provision_strong": "Обеспеченность (сильная)",
             "area_accessibility": "Доступность, мин",
+            "spacematrix_cluster": "Кластер Spacematrix",
+            "land_use_share": "Доля преобладающей зоны",
         },
     )
 
@@ -363,13 +375,17 @@ def build_map(master: gpd.GeoDataFrame) -> folium.Map:
     ).add_to(m)
 
     source_layers = [
-        ("roads.geojson", "Дороги", {"color": "#8d6e63", "weight": 0.8}),
-        ("railways.geojson", "Железные дороги", {"color": "#455a64", "weight": 1.2, "dashArray": "6,4"}),
-        ("water.geojson", "Вода", {"color": "#42a5f5", "weight": 0.8, "fillColor": "#90caf9", "fillOpacity": 0.6}),
+        ("roads.geojson", "Дороги", {"color": "gray", "weight": 1}, {"LineString", "MultiLineString"}),
+        ("railways.geojson", "Железные дороги", {"color": "#455a64", "weight": 1.2, "dashArray": "6,4"},
+         {"LineString", "MultiLineString"}),
+        ("water.geojson", "Вода", {"color": "#42a5f5", "weight": 0.8, "fillColor": "#90caf9", "fillOpacity": 0.6},
+         None),
     ]
-    for fname, layer_name, st in source_layers:
+    for fname, layer_name, st, geom_types in source_layers:
         try:
             g = gpd.read_file(BASE / fname)
+            if geom_types:
+                g = g[g.geometry.geom_type.isin(geom_types)]
             folium.GeoJson(
                 minimize_geojson(json.loads(g[["geometry"]].to_json())),
                 name=f"Источник: {layer_name}",
@@ -461,10 +477,24 @@ STAT_FIELDS = {
     "osr": "OSR — свободная площадь",
     "share_living": "Доля жилой площади",
     "share_non_living": "Доля нежилой площади",
+    "footprint_area": "Пятно застройки, м²",
+    "build_floor_area": "Площадь этажей, м²",
+    "living_area": "Жилая площадь, м²",
+    "non_living_area": "Нежилая площадь, м²",
     "population": "Население, чел",
+    "demand": "Спрос на школы, мест",
+    "capacity_schools": "Ёмкость школ, мест",
+    "demand_left": "Не покрытый спрос, мест",
+    "demand_within": "Спрос в пределах норматива",
+    "demand_without": "Спрос за пределами норматива",
+    "capacity_left": "Свободная ёмкость школ",
+    "capacity_within": "Ёмкость в пределах норматива",
+    "capacity_without": "Ёмкость за пределами норматива",
     "provision_strong": "Обеспеченность (сильная)",
     "provision_weak": "Обеспеченность (слабая)",
     "area_accessibility": "Доступность, мин",
+    "land_use_share": "Доля преобладающей зоны",
+    "spacematrix_cluster": "Кластер Spacematrix",
 }
 
 
@@ -474,7 +504,7 @@ def build_tables(master: gpd.GeoDataFrame) -> dict:
         classes="table", border=0
     )
 
-    stats_src = master[[c for c in STAT_FIELDS]].replace([np.inf, -np.inf], np.nan)
+    stats_src = master[[c for c in STAT_FIELDS if c in master.columns]].replace([np.inf, -np.inf], np.nan)
     stats = stats_src.describe().T
     stats.index = [STAT_FIELDS[i] for i in stats.index]
     stats = stats[["count", "mean", "std", "min", "50%", "max"]].round(3)
@@ -483,10 +513,14 @@ def build_tables(master: gpd.GeoDataFrame) -> dict:
 
     try:
         clusters = read_table("spacematrix_clusters.csv")
-        clusters = clusters.rename(columns={"cluster": "Кластер", "l": "Этажность", "fsi": "FSI",
-                                            "mxi": "MXI", "morphotype": "Морфотип (EN)"})
+        clusters = clusters.rename(columns={
+            "cluster": "Кластер", "l": "Этажность", "fsi": "FSI", "mxi": "MXI",
+            "l_interpretation": "Этажность (EN)", "fsi_interpretation": "Плотность (EN)",
+            "mxi_interpretation": "Смешанность (EN)", "morphotype": "Морфотип (EN)",
+        })
         clusters["Морфотип"] = clusters["Морфотип (EN)"].apply(spacematrix_label)
-        cols = ["Кластер", "Этажность", "FSI", "MXI", "Морфотип", "Морфотип (EN)"]
+        cols = ["Кластер", "Этажность", "FSI", "MXI", "Морфотип", "Этажность (EN)",
+                "Плотность (EN)", "Смешанность (EN)", "Морфотип (EN)"]
         view = clusters[cols].copy()
         num_cols = view.select_dtypes("number").columns
         view[num_cols] = view[num_cols].round(3)
@@ -634,7 +668,7 @@ def build_legends(master: gpd.GeoDataFrame, numeric_norms: dict) -> str:
         "<div class='legend-item'><div class='legend-title'>Прочее</div>"
         "<div class='swatch-row'><span class='swatch' style='background:#e53935'></span><span>Школа</span></div>"
         "<div class='swatch-row'><span class='swatch' style='background:transparent;border:2px solid #222'></span><span>Граница округа</span></div>"
-        "<div class='swatch-row'><span class='swatch' style='background:#8d6e63'></span><span>Источник: дороги</span></div>"
+        "<div class='swatch-row'><span class='swatch' style='background:#808080'></span><span>Источник: дороги</span></div>"
         "<div class='swatch-row'><span class='swatch' style='background:#455a64'></span><span>Источник: ж/д</span></div>"
         "<div class='swatch-row'><span class='swatch' style='background:#90caf9'></span><span>Источник: вода</span></div>"
         "</div>"
