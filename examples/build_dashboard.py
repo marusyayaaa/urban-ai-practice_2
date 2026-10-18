@@ -219,10 +219,15 @@ def load_data() -> gpd.GeoDataFrame:
         master["school_capacity"] = 0.0
         master["school_count"] = 0.0
 
+    land_use_categories = ["residential", "business", "recreation", "industrial",
+                           "transport", "special", "agriculture"]
     try:
         landuse = gpd.read_file(BASE / "blocks_landuse.geojson")
         master["land_use"] = landuse["land_use"]
         master["land_use_share"] = landuse["share"]
+        for cat in land_use_categories:
+            if cat in landuse.columns:
+                master[f"lu_{cat}"] = landuse[cat]
     except Exception:
         master["land_use"] = None
         master["land_use_share"] = None
@@ -481,6 +486,14 @@ STAT_FIELDS = {
     "build_floor_area": "Площадь этажей, м²",
     "living_area": "Жилая площадь, м²",
     "non_living_area": "Нежилая площадь, м²",
+    "site_area": "Площадь квартала, м²",
+    "lu_residential": "Доля жилой зоны",
+    "lu_business": "Доля зоны бизнеса",
+    "lu_recreation": "Доля зоны рекреации",
+    "lu_industrial": "Доля промышленной зоны",
+    "lu_transport": "Доля транспортной зоны",
+    "lu_special": "Доля специальной зоны",
+    "lu_agriculture": "Доля сельхоз. зоны",
     "population": "Население, чел",
     "demand": "Спрос на школы, мест",
     "capacity_schools": "Ёмкость школ, мест",
