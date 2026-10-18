@@ -42,3 +42,15 @@ ENV/
 
 # PyCharm env
 .idea
+
+# VS Code
+.vscode/
+
+# OS
+.DS_Store
+
+# Project cache
+examples/cache/
+
+# Large local research data (shared separately, not in git)
+examples/data/omsk_kirovsky/
